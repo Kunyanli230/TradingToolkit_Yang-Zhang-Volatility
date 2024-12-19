@@ -1,0 +1,102 @@
+indicator('Adaptive Volatility-Scaled Oscillator [AVSO] (Zeiierman)', overlay = false, precision = 2, dynamic_requests = true)
+
+// Tooltips for Inputs
+string t1 = 'Source: Select the price source (e.g., close, open, high, low) for volume scaling calculations.\n\n' +
+    'The chosen source influences how the volscale value is computed. Typically, "close" is used for end-of-period analysis, while "high" or "low" can be used for more volatility-sensitive strategies.'
+
+string t2 = "Metric Measure: Choose the method for measuring the metric to use in the scaling calculation. Options include:\n\n" +
+    "Volume: Uses raw volume data.\n" +
+    "Close: Uses closing price changes.\n" +
+    "Standard Deviation: Measures price dispersion over a set period.\n" +
+    "ATR: Average True Range over a set period.\n" +
+    "Yang: Yang-Zhang volatility estimator, which accounts for open, high, low, and close prices."
+
+string t3 = 'Bars to Analyze: Sets the number of bars used to calculate the mean and standard deviation of the volscale value.\n\n' +
+    'A higher period smooths the analysis, making it less sensitive to short-term fluctuations, while a lower period reacts more quickly to recent changes.'
+
+string t4 = 'ATR / Standard Deviation Period: Defines the lookback period for calculating the ATR or standard deviation, depending on the selected volatility measure.\n\n' +
+    'Shorter periods capture rapid volatility changes, while longer periods provide a broader historical context.'
+
+string t5 = 'Yang Volatility Period: Sets the number of bars used in the Yang-Zhang volatility estimator. This method accounts for price gaps and intraday volatility, providing a more comprehensive volatility measure compared to traditional methods.'
+
+string t6 = 'Smoothing Period: Determines the base length for adaptive smoothing of the Z-Score.\n\n' +
+    'A longer smoothing period results in a smoother, less reactive line, while a shorter period makes the smoothing more sensitive to recent changes.'
+
+// Inputs
+src1 = input.source(close, title = 'Source', group = "General Settings", tooltip = t1)
+metricMeasure = input.string(title = 'Volatility Measure', defval = 'Standard Deviation', 
+    options = ['Volume', 'Close', 'Standard Deviation', 'ATR', 'Yang'], group = "General Settings", tooltip = t2)
+length = input.int(20, minval = 2, title = 'Bars to Analyze', group = "General Settings", tooltip = t3)
+dev = input.int(12, minval = 1, title = 'ATR / Standard Deviation Period', group = "ATR / Standard Deviation", tooltip = t4)
+period_vol = input.int(14, minval = 1, title = 'Yang Volatility Period', group = "Yang", tooltip = t5)
+smoothing_length = input.int(5, minval = 1, title = 'Smoothing Period', group = "Adaptive Smoothing Line", tooltip = t6)
+
+// Scaled Metric Calculation
+scaledMetric(src_, vol_, market_cap) =>
+    dollar_volume = src_ * vol_
+    log_avg_dollar_vol = dollar_volume > 0 ? math.log(dollar_volume) : na
+    market_cap != 0 and not na(log_avg_dollar_vol) ? log_avg_dollar_vol / market_cap : na
+
+// Yang-Zhang Volatility Estimator
+method yang_zhang_volatility(float open, float high, float low, float close, int period) =>
+    R_oo = math.log(open / close[1])
+    R_oc = math.log(close / open)
+    R_hl = math.log(high / low)
+
+    sigma_oo_sq = ta.variance(R_oo, period)
+    sigma_oc_sq = ta.variance(R_oc, period)
+    sigma_hl_sq = ta.variance(R_hl, period)
+
+    k = 0.34
+    c = 0.34
+
+    sigma_YZ_sq = k * sigma_oo_sq + (1 - k) * sigma_oc_sq + c * sigma_hl_sq
+    sigma_YZ_sq := sigma_YZ_sq >= 0 ? sigma_YZ_sq : 0
+
+    math.sqrt(sigma_YZ_sq)
+
+Yang = yang_zhang_volatility(open, high, low, close, period_vol)
+
+// Switch Logic for Metric Measure
+scaled_metric_val = switch metricMeasure
+    'Volume' => scaledMetric(src1, volume, 10)
+    'Close' => scaledMetric(src1, close, 10)
+    'Standard Deviation' => scaledMetric(src1, ta.stdev(close, dev), 10)
+    'ATR' => scaledMetric(src1, ta.atr(dev), 10)
+    'Yang' => scaledMetric(src1, Yang, 10)
+
+// Scaled Volatility Oscillator
+mean_scaled_metric = ta.sma(scaled_metric_val, length)
+std_scaled_metric = ta.stdev(scaled_metric_val, length)
+scaled_volatility = (scaled_metric_val - mean_scaled_metric) / std_scaled_metric
+
+// Adaptive EMA Function
+adaptive_ema(src, length) =>
+    alpha = 2.0 / (length + 1.0)
+    var float ema = src
+    ema := na(src) ? ema : alpha * src + (1 - alpha) * nz(ema)
+    ema
+
+// Adaptive Smoothing
+dynamic_length = smoothing_length + int(math.abs(scaled_volatility) * 2)
+adaptive_smoothing = adaptive_ema(scaled_volatility, dynamic_length)
+
+// Gradient Coloring
+gradient_color(value) =>
+    clamped_value = math.max(math.min(value, 3), -3)
+    normalized_value = (clamped_value + 3) / 6
+    r = int(173 + (41 - 173) * normalized_value)
+    g = int(216 + (98 - 216) * normalized_value)
+    b = int(230 + (255 - 230) * normalized_value)
+    color.rgb(r, g, b)
+
+z_color = gradient_color(scaled_volatility)
+
+// Plots
+hline(0, 'Zero Line', color = color.gray)
+plot(scaled_volatility, title = 'Scaled Volatility', color = z_color, linewidth = 2, style = plot.style_columns)
+plot(adaptive_smoothing, title = "Adaptive Smoothing", color = z_color, linewidth = 2)
+hline(2, 'High Volatility', color = color.blue, linestyle = hline.style_dotted)
+hline(-2, 'Low Volatility', color = color.blue, linestyle = hline.style_dotted)
+bgcolor(scaled_volatility > 2 ? color.new(z_color, 80) : na, title = 'High Volatility')
+bgcolor(scaled_volatility < -2 ? color.new(z_color, 80) : na, title = 'Low Volatility')
