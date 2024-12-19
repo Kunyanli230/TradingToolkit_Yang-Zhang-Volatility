@@ -1,4 +1,4 @@
-indicator('Adaptive Volatility-Scaled Oscillator [AVSO] (Zeiierman)', overlay = false, precision = 2, dynamic_requests = true)
+indicator('Yang-Zhang Volatility Oscillator', overlay = false, precision = 2, dynamic_requests = true)
 
 // Tooltips for Inputs
 string t1 = 'Source: Select the price source (e.g., close, open, high, low) for volume scaling calculations.\n\n' +
